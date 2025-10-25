@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Classic Snake Game - High Scores</title>
+    <style>
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            min-height: 100vh;
+            margin: 0;
+            padding-top: 50px;
+            background-color: #333;
+            font-family: 'Courier New', Courier, monospace;
+            color: #ecf0f1;
+            gap: 40px;
+        }
+        #game-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        canvas {
+            border: 5px solid #2ecc71;
+            background-color: #2c3e50;
+            margin-bottom: 20px;
+        }
+        #score {
+            font-size: 2em;
+            margin-bottom: 20px;
+        }
+        #leaderboard {
+            width: 300px;
+            padding: 20px;
+            border: 3px solid #f1c40f;
+            background-color: #34495e;
+            border-radius: 5px;
+        }
+        #leaderboard h2 {
+            margin-top: 0;
+            color: #f1c40f;
+            text-align: center;
+            border-bottom: 2px solid #f1c40f;
+            padding-bottom: 10px;
+        }
+        #leaderboard ol {
+            padding-left: 0;
+            list-style: none;
+        }
+        #leaderboard li {
+            font-size: 1.1em;
+            padding: 5px 0;
+            display: flex;
+            justify-content: space-between;
+            border-bottom: 1px dashed #5e7992;
+        }
+        #leaderboard li:last-child {
+            border-bottom: none;
+        }
+        #menu {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: #34495e;
+            border: 5px solid #2ecc71;
+            padding: 40px;
+            border-radius: 10px;
+            text-align: center;
+            z-index: 100;
+        }
+        #menu h1 {
+            color: #2ecc71;
+            font-size: 3em;
+            margin: 0 0 20px 0;
+        }
+        #menu button {
+            background-color: #2ecc71;
+            color: #2c3e50;
+            border: none;
+            padding: 15px 40px;
+            font-size: 1.5em;
+            font-family: 'Courier New', Courier, monospace;
+            cursor: pointer;
+            border-radius: 5px;
+            margin-top: 20px;
+        }
+        #menu button:hover {
+            background-color: #27ae60;
+        }
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="menu">
+        <h1>SNAKE</h1>
+        <p style="font-size: 1.2em;">Use WASD or Arrow Keys to move</p>
+        <button id="playButton">PLAY</button>
+    </div>
+
+    <div id="game-container">
+        <div id="score">Score: 0</div>
+        <canvas id="gameCanvas" width="400" height="400"></canvas>
+    </div>
+
+    <div id="leaderboard">
+        <h2>Global High Scores</h2>
+        <ol id="highScoresList">
+            <li>Loading...</li>
+        </ol>
+    </div>
+
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script> 
+
+    <script>
+        // ==========================================================
+        // STEP 1: FIREBASE CONFIGURATION
+        // ==========================================================
+        const firebaseConfig = {
+            apiKey: "AIzaSyBQcgxogX4CVe05jm7_XMbS79adugVhDs0",
+            authDomain: "snake-highscores-project.firebaseapp.com",
+            databaseURL: "https://snake-highscores-project-default-rtdb.firebaseio.com",
+            projectId: "snake-highscores-project",
+            storageBucket: "snake-highscores-project.firebasestorage.app",
+            messagingSenderId: "559859560697",
+            appId: "1:559859560697:web:b68bb656a578ef64893228"
+        };
+
+        // Initialize Firebase and the Database object
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database(); 
+        const SCORE_PATH = 'highscores';
+        // ==========================================================
+
+        // Get the canvas and its 2D drawing context
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreElement = document.getElementById('score');
+        const highScoresList = document.getElementById('highScoresList');
+
+        // Game constants
+        const gridSize = 20;
+        let snakeSpeed = 100;
+
+        // Game state
+        let snake = [{ x: 10 * gridSize, y: 10 * gridSize }];
+        let food = {};
+        let score = 0;
+        let dx = gridSize;
+        let dy = 0;
+        let changingDirection = false;
+        let gameOver = false;
+        let gameStarted = false;
+        let gameLoop = null;
+
+        // Profanity filter - list of common curse words
+        const profanityList = [
+            'fuck', 'shit', 'damn', 'bitch', 'ass', 'bastard', 'crap', 'hell',
+            'piss', 'dick', 'cock', 'pussy', 'fag', 'cunt', 'slut', 'whore',
+            'nigger', 'nigga', 'retard', 'rape', 'sex', 'porn', 'xxx', 'penis', 'dih', 'arse', 'motherfucker', 'faggot', 'niger', 
+        ];
+
+        function containsProfanity(text) {
+            const lowerText = text.toLowerCase();
+            return profanityList.some(word => lowerText.includes(word));
+        }
+
+        // --- FIREBASE COMMUNICATION FUNCTIONS ---
+
+        /**
+         * Sends the final score to Firebase.
+         */
+        function saveScore(finalScore) {
+            if (finalScore === 0) {
+                showMenu();
+                return;
+            }
+
+            let name = prompt(`Game Over! Your score: ${finalScore}\nEnter your name for the leaderboard:`);
+            
+            if (!name || name.trim() === '') {
+                showMenu();
+                return;
+            }
+
+            // Check for profanity
+            if (containsProfanity(name)) {
+                alert("Your name contains inappropriate language. Please choose a different name.");
+                saveScore(finalScore);
+                return;
+            }
+
+            const newScoreRef = db.ref(SCORE_PATH).push();
+            
+            newScoreRef.set({
+                name: name.trim().substring(0, 20),
+                score: finalScore,
+                timestamp: firebase.database.ServerValue.TIMESTAMP
+            }).then(() => {
+                loadHighScores();
+                showMenu();
+            }).catch(error => {
+                console.error('Error saving score:', error);
+                alert("Could not save score to Firebase.");
+                showMenu();
+            });
+        }
+
+        /**
+         * Retrieves the top 10 scores from Firebase and updates the list.
+         */
+        function loadHighScores() {
+            db.ref(SCORE_PATH)
+                .orderByChild('score')
+                .limitToLast(10)
+                .once('value', (snapshot) => {
+                    highScoresList.innerHTML = '';
+                    
+                    if (!snapshot.exists()) {
+                        highScoresList.innerHTML = '<li>No scores yet! Be the first!</li>';
+                        return;
+                    }
+
+                    const scores = [];
+                    snapshot.forEach(childSnapshot => {
+                        scores.push(childSnapshot.val());
+                    });
+
+                    scores.reverse();
+
+                    scores.forEach((item, index) => {
+                        const li = document.createElement('li');
+                        li.innerHTML = `
+                            <span>${index + 1}. ${item.name}</span>
+                            <span>${item.score}</span>
+                        `;
+                        highScoresList.appendChild(li);
+                    });
+                }).catch(error => {
+                    console.error('Error loading high scores:', error);
+                    highScoresList.innerHTML = '<li>Error connecting to Firebase.</li>';
+                });
+        }
+        
+        // --- GAME CORE FUNCTIONS ---
+
+        // Main game loop that updates and draws the game state
+        function main() {
+            if (gameOver) {
+                saveScore(score);
+                return; 
+            }
+
+            gameLoop = setTimeout(function onTick() {
+                if (!gameStarted) {
+                    clearCanvas();
+                    drawFood();
+                    drawSnake();
+                    main();
+                    return;
+                }
+
+                changingDirection = false;
+                clearCanvas();
+                drawFood();
+                moveSnake();
+                drawSnake();
+                checkCollision();
+                main();
+            }, snakeSpeed);
+        }
+
+        // Draw a green rectangle for each snake segment
+        function drawSnake() {
+            snake.forEach(drawSnakePart);
+        }
+
+        function drawSnakePart(snakePart) {
+            ctx.fillStyle = '#2ecc71';
+            ctx.fillRect(snakePart.x, snakePart.y, gridSize, gridSize);
+            ctx.strokeStyle = '#27ae60';
+            ctx.strokeRect(snakePart.x, snakePart.y, gridSize, gridSize);
+        }
+
+        // Move the snake by adding a new head and removing the tail
+        function moveSnake() {
+            const head = { x: snake[0].x + dx, y: snake[0].y + dy };
+            snake.unshift(head);
+
+            if (hasEatenFood()) {
+                score++;
+                scoreElement.textContent = `Score: ${score}`;
+                createFood();
+                if (score % 5 === 0) {
+                    snakeSpeed = Math.max(50, snakeSpeed - 5);
+                }
+            } else {
+                snake.pop();
+            }
+        }
+
+        // Clear the entire canvas
+        function clearCanvas() {
+            ctx.fillStyle = '#2c3e50';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+
+        // Create food at a random position
+        function createFood() {
+            food.x = Math.floor(Math.random() * (canvas.width / gridSize)) * gridSize;
+            food.y = Math.floor(Math.random() * (canvas.height / gridSize)) * gridSize;
+            
+            snake.forEach(part => {
+                if (part.x === food.x && part.y === food.y) {
+                    createFood(); 
+                }
+            });
+        }
+
+        function drawFood() {
+            ctx.fillStyle = '#e74c3c';
+            ctx.fillRect(food.x, food.y, gridSize, gridSize);
+        }
+
+        // Check if snake has eaten the food
+        function hasEatenFood() {
+            return snake[0].x === food.x && snake[0].y === food.y;
+        }
+
+        // Check for collisions with walls or itself
+        function checkCollision() {
+            for (let i = 1; i < snake.length; i++) {
+                if (snake[0].x === snake[i].x && snake[0].y === snake[i].y) {
+                    gameOver = true;
+                }
+            }
+            
+            const hitLeftWall = snake[0].x < 0;
+            const hitRightWall = snake[0].x >= canvas.width;
+            const hitTopWall = snake[0].y < 0;
+            const hitBottomWall = snake[0].y >= canvas.height;
+
+            if (hitLeftWall || hitRightWall || hitTopWall || hitBottomWall) {
+                gameOver = true;
+            }
+        }
+
+        // Change snake direction based on user input
+        function changeDirection(event) {
+            const keyPressed = event.key.toLowerCase(); 
+            const goingUp = dy === -gridSize;
+            const goingDown = dy === gridSize;
+            const goingRight = dx === gridSize;
+            const goingLeft = dx === -gridSize;
+
+            if (changingDirection) return;
+            changingDirection = true;
+
+            let directionChanged = false;
+
+            if ((keyPressed === 'w' || event.keyCode === 38) && !goingDown) {
+                dx = 0;
+                dy = -gridSize;
+                directionChanged = true;
+            }
+            else if ((keyPressed === 's' || event.keyCode === 40) && !goingUp) {
+                dx = 0;
+                dy = gridSize;
+                directionChanged = true;
+            }
+            else if ((keyPressed === 'a' || event.keyCode === 37) && !goingRight) {
+                dx = -gridSize;
+                dy = 0;
+                directionChanged = true;
+            }
+            else if ((keyPressed === 'd' || event.keyCode === 39) && !goingLeft) {
+                dx = gridSize;
+                dy = 0;
+                directionChanged = true;
+            }
+
+            if (directionChanged && !gameStarted) {
+                gameStarted = true;
+            }
+        }
+
+        // Menu functions
+        function showMenu() {
+            document.getElementById('menu').classList.remove('hidden');
+        }
+
+        function hideMenu() {
+            document.getElementById('menu').classList.add('hidden');
+        }
+
+        function resetGame() {
+            if (gameLoop) {
+                clearTimeout(gameLoop);
+                gameLoop = null;
+            }
+
+            snake = [{ x: 10 * gridSize, y: 10 * gridSize }];
+            score = 0;
+            dx = gridSize;
+            dy = 0;
+            changingDirection = false;
+            gameOver = false;
+            gameStarted = false;
+            snakeSpeed = 100;
+            scoreElement.textContent = `Score: 0`;
+            
+            createFood();
+            clearCanvas();
+            drawFood();
+            drawSnake();
+            
+            // Small delay to ensure state is fully reset
+            setTimeout(() => {
+                main();
+            }, 50);
+        }
+
+        // Play button event
+        document.getElementById('playButton').addEventListener('click', function() {
+            hideMenu();
+            resetGame();
+        });
+
+        // Initialize
+        loadHighScores();
+        document.addEventListener('keydown', changeDirection);
+    </script>
+</body>
+</html>
